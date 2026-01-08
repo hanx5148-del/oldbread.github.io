@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>美股操盘账本</title>
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/2422/2422796.png" />
+
+  <script src="https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/tesseract.min.js"></script>
+
+  <style>
+    :root { --p:#007AFF; --s:#34C759; --d:#FF3B30; --bg:#F2F2F7; }
+    body { font-family:-apple-system, sans-serif; background:var(--bg); margin:0; padding-bottom:120px; -webkit-user-select:none; }
+
+    header { background:#fff; padding:20px 18px; border-bottom:1px solid #ddd; position:sticky; top:0; z-index:10; }
+    .header-grid { display:flex; gap:14px; justify-content:space-between; align-items:flex-end; }
+    .stat-label { font-size:12px; color:#888; margin-bottom:5px; }
+    .stat-val { font-size:20px; font-weight:800; line-height:1.1; }
+    .win { color:var(--s); }
+    .loss { color:var(--d); }
+    .muted { color:#444; }
+
+    main { padding:15px; }
+    .card { background:#fff; border-radius:15px; padding:16px; margin-bottom:12px; box-shadow:0 2px 5px rgba(0,0,0,0.05); border-left:6px solid #ccc; }
+    .card.buy { border-left-color:var(--p); }
+    .card.sell { border-left-color:#FF9500; }
+    .card-row { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; gap:10px; }
+    .symbol { font-size:18px; font-weight:900; }
+    .time { font-size:12px; color:#999; text-align:right; }
+    .pnl-box { margin-top:10px; padding-top:10px; border-top:1px dashed #eee; text-align:right; }
+    .subtle { font-size:12px; color:#999; }
+
+    .bottom-nav { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); display:flex; gap:18px; z-index:100; }
+    .btn-round { width:65px; height:65px; border-radius:50%; border:none; color:#fff; font-size:24px; box-shadow:0 4px 15px rgba(0,0,0,0.2); display:flex; align-items:center; justify-content:center; }
+    .btn-add { background:var(--p); }
+    .btn-ocr { background:#5856D6; }
+
+    .modal { position:fixed; inset:0; background:rgba(0,0,0,0.6); display:none; align-items:flex-end; z-index:1000; }
+    .modal-content { background:#fff; width:100%; border-radius:25px 25px 0 0; padding:25px; box-sizing:border-box; max-height:82vh; overflow-y:auto; }
+    input, select { width:100%; padding:15px; margin:10px 0; border:1px solid #ddd; border-radius:12px; font-size:18px; box-sizing:border-box; background:#f9f9f9; }
+    .btn-submit { background:var(--p); color:#fff; width:100%; padding:18px; border-radius:15px; border:none; font-size:18px; font-weight:900; margin-top:10px; }
+    .btn-ghost { background:#eee; color:#333; }
+
+    .batch-item { display:flex; align-items:flex-start; gap:10px; border-bottom:1px solid #eee; padding:10px 0; }
+    .batch-info { flex:1; font-size:14px; line-height:1.35; }
+    .loading-spin { text-align:center; padding:30px; color:var(--p); }
+    .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; background:#f2f2f7; color:#555; margin-left:8px; }
+
+    /* ===== 投资计划面板 UI ===== */
+    #plan-board { padding:12px 15px 0; }
+    .plan-card { background:#fff; border-radius:15px; padding:16px; box-shadow:0 2px 5px rgba(0,0,0,0.05); margin:0 0 12px 0; }
+    .plan-title { font-size:16px; font-weight:900; display:flex; justify-content:space-between; align-items:center; gap:10px; }
+    .plan-sub { font-size:12px; color:#888; margin-top:6px; line-height:1.4; }
+    .bar { height:10px; background:#eee; border-radius:999px; overflow:hidden; margin-top:10px; }
+    .bar > div { height:100%; width:0%; background:var(--p); }
+    .plan-row { display:flex; justify-content:space-between; gap:10px; margin-top:12px; align-items:flex-end; }
+    .plan-sym { font-weight:900; }
+    .plan-meta { font-size:12px; color:#666; }
+    .badge { font-size:12px; padding:2px 8px; border-radius:999px; background:#f2f2f7; color:#555; white-space:nowrap; }
+    .badge.over { background:#ffecec; color:#c00; }
+  </style>
+</head>
+
+<body>
+<header>
+  <div class="header-grid">
+    <div>
+      <div class="stat-label">实现总盈亏 (USD)</div>
+      <div class="stat-val" id="total-pnl">$0.00</div>
+    </div>
+    <div style="text-align:right">
+      <div class="stat-label">记录笔数</div>
+      <div class="stat-val muted" id="total-count">0</div>
+    </div>
+  </div>
+</header>
+
+<section id="plan-board"></section>
+
+<main id="trade-list"></main>
+
+<div class="bottom-nav">
+  <button class="btn-round btn-ocr" onclick="document.getElementById('file-input').click()">📷</button>
+  <button class="btn-round btn-add" onclick="showModal('manual')">+</button>
+</div>
+
+<input type="file" id="file-input" hidden accept="image/*" onchange="handleOcr(this)" />
+
+<div class="modal" id="modal-manual" onclick="if(event.target==this)this.style.display='none'">
+  <div class="modal-content">
+    <h2 style="margin-top:0">新交易录入</h2>
+    <input type="text" id="m-symbol" placeholder="股票代码 (如 NVDA / VOO / CASH)" style="text-transform:uppercase" />
+    <select id="m-action">
+      <option value="buy">买入 / 加仓</option>
+      <option value="sell">卖出 / 减仓（未来用）</option>
+    </select>
+    <div style="display:flex; gap:10px;">
+      <input type="number" id="m-qty" inputmode="decimal" placeholder="数量" />
+      <input type="number" id="m-price" inputmode="decimal" placeholder="成交价（CASH 可填 1）" />
+    </div>
+    <input type="number" id="m-fee" inputmode="decimal" placeholder="手续费 (可选)" value="0" />
+    <button class="btn-submit" onclick="saveManual()">保存记录</button>
+  </div>
+</div>
+
+<div class="modal" id="modal-ocr">
+  <div class="modal-content">
+    <h2 style="margin-top:0">识别结果确认 <span class="pill">IBKR 买入历史 / 批次</span></h2>
+    <div id="ocr-status"></div>
+    <div id="ocr-results"></div>
+    <button class="btn-submit" id="btn-import-all" style="display:none;" onclick="importBatch()">确认导入选中项</button>
+    <button class="btn-submit btn-ghost" onclick="closeOcrModal()">取消</button>
+  </div>
+</div>
+
+<script>
+  // ========= 1) 数据库 =========
+  const db = new Dexie("TradeLedgerDB");
+  db.version(1).stores({ trades: "++id, symbol, action, timestamp" });
+
+  let ocrTempData = [];
+
+  // ========= 2) 投资计划（默认按你截图） =========
+  // 口径：目标金额（USD）
+  const PLAN = {
+    title: "20万人民币长期投资配置（执行版）",
+    totalTargetUsd: 28000,
+    targets: {
+      VOO: 5600,
+      QQQ: 4200,
+      SMH: 4200,
+
+      COPX: 2800,
+      URNM: 2800,
+      CCJ: 1960,
+      LTBR: 840,
+
+      VWO: 1960,
+      VNM: 840,
+      EWJ: 1120,
+
+      CASH: 1680,   // 现金/机动（建议手动录一条 CASH 买入：qty=入金美元, price=1）
+      NVDA: 1400,
+      TSLA: 840,
+      OTHER: 560
+    }
+  };
+
+  function startOfLocalDay(ts) {
+    const d = new Date(ts);
+    d.setHours(0,0,0,0);
+    return d.getTime();
+  }
+
+  function renderPlanBoard({ investedTotal, todayAdded, remainingTotal, perSymbol }) {
+    const el = document.getElementById("plan-board");
+    const pct = PLAN.totalTargetUsd > 0 ? Math.min(100, (investedTotal / PLAN.totalTargetUsd) * 100) : 0;
+
+    const rows = Object.entries(PLAN.targets).map(([sym, target]) => {
+      const invested = perSymbol[sym] || 0;
+      const remaining = target - invested;
+      const p = target > 0 ? Math.min(100, (invested / target) * 100) : 0;
+      const over = remaining < -0.01;
+
+      return `
+        <div class="plan-row">
+          <div>
+            <div class="plan-sym">${sym}</div>
+            <div class="plan-meta">目标 $${target.toFixed(0)} · 已投 $${invested.toFixed(0)}</div>
+          </div>
+          <div style="text-align:right">
+            <div class="badge ${over ? "over" : ""}">
+              ${over ? `超配 $${Math.abs(remaining).toFixed(0)}` : `还差 $${Math.max(0, remaining).toFixed(0)}`}
+            </div>
+            <div class="plan-meta" style="margin-top:6px;">进度 ${p.toFixed(0)}%</div>
+          </div>
+        </div>
+        <div class="bar"><div style="width:${p.toFixed(2)}%"></div></div>
+      `;
+    }).join("");
+
+    el.innerHTML = `
+      <div class="plan-card">
+        <div class="plan-title">
+          <span>${PLAN.title}</span>
+          <span class="badge">今日 +$${todayAdded.toFixed(2)}</span>
+        </div>
+
+        <div class="plan-sub">
+          总目标 $${PLAN.totalTargetUsd.toFixed(0)} · 已投 $${investedTotal.toFixed(2)} · 距离目标 $${Math.max(0, remainingTotal).toFixed(2)}
+        </div>
+
+        <div class="bar"><div style="width:${pct.toFixed(2)}%"></div></div>
+
+        <div style="margin-top:14px;">
+          ${rows}
+        </div>
+
+        <div class="plan-sub" style="margin-top:12px;">
+          口径：已投=买入金额合计（qty×price+fee），不含市值波动；CASH/OTHER 不录入交易会一直显示“还差”。
+        </div>
+      </div>
+    `;
+  }
+
+  // ========= 3) 核心逻辑：均价与盈亏（你未来卖出也不炸） =========
+  async function calculateAndRender() {
+    const allTrades = await db.trades.orderBy("timestamp").toArray();
+    const listEl = document.getElementById("trade-list");
+
+    // ---- A) 计划统计：已投/今日加仓/剩余 ----
+    const today0 = startOfLocalDay(Date.now());
+    let investedTotal = 0;
+    let todayAdded = 0;
+    let perSymbol = {}; // buy 金额累计
+
+    for (const t of allTrades) {
+      if (t.action !== "buy") continue;
+      const amt = (t.qty * t.price) + (t.fee || 0);
+      investedTotal += amt;
+
+      const sym = (t.symbol || "").toUpperCase();
+      perSymbol[sym] = (perSymbol[sym] || 0) + amt;
+
+      if (t.timestamp >= today0) todayAdded += amt;
+    }
+
+    const remainingTotal = PLAN.totalTargetUsd - investedTotal;
+    renderPlanBoard({ investedTotal, todayAdded, remainingTotal, perSymbol });
+
+    // ---- B) 账本盈亏（现在没卖=0，未来卖了会算）----
+    let inventory = {}; // { NVDA: { qty, cost } }
+    let totalPnL = 0;
+
+    const processed = allTrades.map(t => {
+      const sym = (t.symbol || "").toUpperCase();
+      if (!inventory[sym]) inventory[sym] = { qty: 0, cost: 0 };
+
+      let pnl = null;
+      let pnlRate = null;
+
+      if (t.action === "buy") {
+        inventory[sym].qty += t.qty;
+        inventory[sym].cost += (t.qty * t.price + (t.fee || 0));
+      } else {
+        if (inventory[sym].qty <= 0) {
+          pnl = null; // 没仓位就不算（避免 NaN）
+        } else {
+          const avgPrice = inventory[sym].cost / inventory[sym].qty;
+          pnl = (t.price - avgPrice) * t.qty - (t.fee || 0);
+          pnlRate = ((pnl / (avgPrice * t.qty)) * 100).toFixed(2);
+          totalPnL += pnl;
+
+          inventory[sym].cost -= (avgPrice * t.qty);
+          inventory[sym].qty -= t.qty;
+
+          if (inventory[sym].qty < 1e-9) {
+            inventory[sym].qty = 0;
+            inventory[sym].cost = 0;
+          }
+        }
+      }
+
+      const curQty = inventory[sym].qty;
+      const curAvg = curQty > 0 ? (inventory[sym].cost / curQty) : 0;
+
+      return {
+        ...t,
+        symbol: sym,
+        pnl,
+        pnlRate,
+        currentAvg: curAvg.toFixed(2),
+      };
+    });
+
+    document.getElementById("total-pnl").innerText = `$${totalPnL.toFixed(2)}`;
+    document.getElementById("total-pnl").className = "stat-val " + (totalPnL >= 0 ? "win" : "loss");
+    document.getElementById("total-count").innerText = allTrades.length;
+
+    listEl.innerHTML = processed.reverse().map(t => `
+      <div class="card ${t.action}">
+        <div class="card-row">
+          <span class="symbol">${t.symbol}</span>
+          <span class="time">${new Date(t.timestamp).toLocaleString()}</span>
+        </div>
+        <div class="card-row">
+          <span>${t.action === "buy" ? "买入" : "卖出"} ${t.qty} 股</span>
+          <span style="font-weight:900">$${Number(t.price).toFixed(2)}</span>
+        </div>
+
+        ${
+          (t.action === "buy" && typeof t.unrealizedPnl === "number")
+          ? `<div class="card-row subtle" style="margin-top:6px;">
+              <span>批次浮盈亏(截图)</span>
+              <span class="${t.unrealizedPnl >= 0 ? "win" : "loss"}" style="font-weight:900;">
+                ${t.unrealizedPnl >= 0 ? "+" : ""}$${t.unrealizedPnl.toFixed(2)}
+              </span>
+            </div>`
+          : ""
+        }
+
+        ${
+          t.pnl !== null
+          ? `<div class="pnl-box">
+              <span class="${t.pnl >= 0 ? "win" : "loss"}" style="font-weight:900">
+                盈亏: $${t.pnl.toFixed(2)} (${t.pnlRate}%)
+              </span>
+            </div>`
+          : `<div style="text-align:right; font-size:12px; color:#999">当前均价: $${t.currentAvg}</div>`
+        }
+      </div>
+    `).join("");
+  }
+
+  // ========= 4) OCR Worker 复用 =========
+  let ocrWorkerPromise = null;
+
+  async function getOcrWorker() {
+    if (!ocrWorkerPromise) {
+      ocrWorkerPromise = (async () => {
+        const worker = await Tesseract.createWorker("eng");
+        await worker.setParameters({
+          tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789$.,:+-/%() ",
+        });
+        return worker;
+      })();
+    }
+    return ocrWorkerPromise;
+  }
+
+  // ========= 5) 图片预处理（放大×2 + 可裁剪） =========
+  // 如果你发现有些截图裁剪掉了表格，把 ENABLE_CROP 改为 false
+  const ENABLE_CROP = true;
+  const CROP = { left: 0.04, top: 0.12, width: 0.92, height: 0.60 };
+
+  async function preprocessImageToBlob(file) {
+    const img = await loadImageFromFile(file);
+
+    const sx = ENABLE_CROP ? Math.floor(img.width * CROP.left) : 0;
+    const sy = ENABLE_CROP ? Math.floor(img.height * CROP.top) : 0;
+    const sw = ENABLE_CROP ? Math.floor(img.width * CROP.width) : img.width;
+    const sh = ENABLE_CROP ? Math.floor(img.height * CROP.height) : img.height;
+
+    const scale = 2;
+    const canvas = document.createElement("canvas");
+    canvas.width = sw * scale;
+    canvas.height = sh * scale;
+
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+
+    return await new Promise(resolve => canvas.toBlob(resolve, "image/png", 1.0));
+  }
+
+  function loadImageFromFile(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+      img.onerror = e => { URL.revokeObjectURL(url); reject(e); };
+      img.src = url;
+    });
+  }
+
+  // ========= 6) OCR 解析：针对“查看批次 / 买入历史” =========
+  function parseLotsFromOcr(data) {
+    const fullText = (data.text || "").replace(/\s+/g, " ").trim();
+    const lines = (data.lines || []).map(l => (l.text || "").trim()).filter(Boolean);
+
+    // 提取 symbol（NVDA NASDAQ / 或退化为任意 ticker）
+    let symbol = null;
+    const m1 = fullText.match(/\b([A-Z]{1,5}(?:\.[A-Z])?)\b(?=\s+(NASDAQ|NYSE|ARCA|BATS)\b)/);
+    const m2 = fullText.match(/\b([A-Z]{1,5}(?:\.[A-Z])?)\b/);
+    symbol = (m1 && m1[1]) || (m2 && m2[1]) || null;
+    if (symbol) symbol = symbol.toUpperCase();
+
+    const moneyToNumber = s => parseFloat(String(s).replace(/[^0-9.+-]/g, ""));
+    const results = [];
+
+    for (const text of lines) {
+      const mDate = text.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+      if (!mDate) continue;
+
+      const moneyMatches = text.match(/\$[0-9,]+(?:\.\d+)?/g) || [];
+      if (moneyMatches.length < 1) continue;
+
+      const acquiredDate = mDate[1];
+      const avgPrice = moneyToNumber(moneyMatches[0]);
+
+      const idxMoney = text.indexOf(moneyMatches[0]);
+      const after = idxMoney >= 0 ? text.slice(idxMoney + moneyMatches[0].length) : text;
+
+      // qty：取第一个合理数字
+      const mQty = after.match(/\b(\d+(?:\.\d+)?)\b/);
+      const qty = mQty ? parseFloat(mQty[1]) : null;
+
+      // 合计盈亏（可选）：行里有第二个$一般是 P&L
+      let pnl = null;
+      if (moneyMatches.length >= 2) pnl = moneyToNumber(moneyMatches[moneyMatches.length - 1]);
+
+      if (!symbol || !Number.isFinite(avgPrice) || !Number.isFinite(qty) || qty <= 0) continue;
+
+      results.push({
+        symbol,
+        action: "buy",
+        qty,
+        price: avgPrice,
+        fee: 0,
+        timestamp: new Date(acquiredDate + "T00:00:00").getTime(),
+        acquiredDate,
+        unrealizedPnl: Number.isFinite(pnl) ? pnl : undefined,
+        source: "ibkr_lots_ocr",
+      });
+    }
+
+    // 去重
+    const seen = new Set();
+    const deduped = [];
+    for (const r of results) {
+      const key = `${r.symbol}|${r.acquiredDate}|${r.qty}|${r.price}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        deduped.push(r);
+      }
+    }
+    return deduped;
+  }
+
+  // ========= 7) OCR 主流程 =========
+  async function handleOcr(input) {
+    const file = input.files && input.files[0];
+    if (!file) return;
+
+    openOcrModal();
+    const status = document.getElementById("ocr-status");
+    const resultsEl = document.getElementById("ocr-results");
+    const btn = document.getElementById("btn-import-all");
+
+    status.innerHTML = '<div class="loading-spin">正在解析截图（建议截图包含“买入历史”表格）...</div>';
+    resultsEl.innerHTML = "";
+    btn.style.display = "none";
+
+    try {
+      const worker = await getOcrWorker();
+      const blob = await preprocessImageToBlob(file);
+      const { data } = await worker.recognize(blob);
+
+      ocrTempData = parseLotsFromOcr(data);
+
+      if (ocrTempData.length > 0) {
+        status.innerHTML = `识别到 <b>${ocrTempData.length}</b> 条买入批次：`;
+        resultsEl.innerHTML = ocrTempData.map((d, i) => `
+          <div class="batch-item">
+            <input type="checkbox" checked id="chk-${i}" style="width:20px; height:20px; margin-top:2px;">
+            <div class="batch-info">
+              <div><b>${d.symbol}</b> ${d.qty} 股 @ $${Number(d.price).toFixed(2)}</div>
+              <div class="subtle">获得日期：${d.acquiredDate || new Date(d.timestamp).toLocaleDateString()}</div>
+              ${
+                typeof d.unrealizedPnl === "number"
+                ? `<div class="${d.unrealizedPnl >= 0 ? "win" : "loss"}" style="font-weight:900;">
+                     合计盈亏(截图)：${d.unrealizedPnl >= 0 ? "+" : ""}$${d.unrealizedPnl.toFixed(2)}
+                   </div>`
+                : ""
+              }
+            </div>
+          </div>
+        `).join("");
+        btn.style.display = "block";
+      } else {
+        status.innerHTML = "未识别出有效批次数据。<br><span class='subtle'>建议：截图尽量只包含“买入历史”表格；或把 ENABLE_CROP 设为 false。</span>";
+      }
+    } catch (e) {
+      status.innerHTML = "识别失败：" + (e && e.message ? e.message : String(e));
+    } finally {
+      input.value = ""; // 允许连续选同一张图也触发 onchange
+    }
+  }
+
+  async function importBatch() {
+    for (let i = 0; i < ocrTempData.length; i++) {
+      const chk = document.getElementById(`chk-${i}`);
+      if (chk && chk.checked) {
+        await db.trades.add({
+          symbol: ocrTempData[i].symbol,
+          action: "buy",
+          qty: ocrTempData[i].qty,
+          price: ocrTempData[i].price,
+          fee: 0,
+          timestamp: ocrTempData[i].timestamp,
+          acquiredDate: ocrTempData[i].acquiredDate,
+          unrealizedPnl: ocrTempData[i].unrealizedPnl,
+          source: ocrTempData[i].source
+        });
+      }
+    }
+    closeOcrModal();
+    calculateAndRender();
+  }
+
+  function openOcrModal() { document.getElementById("modal-ocr").style.display = "flex"; }
+  function closeOcrModal() { document.getElementById("modal-ocr").style.display = "none"; }
+
+  // ========= 8) 手动录入 =========
+  function showModal(id) { document.getElementById("modal-" + id).style.display = "flex"; }
+
+  async function saveManual() {
+    const symbol = document.getElementById("m-symbol").value.trim().toUpperCase();
+    const action = document.getElementById("m-action").value;
+    const qty = parseFloat(document.getElementById("m-qty").value);
+    const price = parseFloat(document.getElementById("m-price").value);
+    const fee = parseFloat(document.getElementById("m-fee").value || 0);
+
+    if (!symbol || !Number.isFinite(qty) || qty <= 0 || !Number.isFinite(price) || price <= 0) {
+      return alert("信息不全或不合法（symbol/数量/价格）");
+    }
+
+    await db.trades.add({
+      symbol,
+      action,
+      qty,
+      price,
+      fee: Number.isFinite(fee) ? fee : 0,
+      timestamp: Date.now(),
+      source: "manual"
+    });
+
+    document.getElementById("modal-manual").style.display = "none";
+    calculateAndRender();
+  }
+
+  // 初始渲染
+  calculateAndRender();
+</script>
+</body>
+</html>
