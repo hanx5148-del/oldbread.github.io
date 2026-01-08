@@ -3,206 +3,188 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>美股交易账本</title>
+    <title>美股智能账本</title>
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <script src="https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.mjs" type="module"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.0.2/dist/tesseract.min.js"></script>
     <style>
-        :root {
-            --primary: #2563eb;
-            --success: #16a34a;
-            --danger: #dc2626;
-            --bg: #f8fafc;
-        }
-        body {
-            font-family: -apple-system, system-ui, sans-serif;
-            background: var(--bg);
-            margin: 0;
-            padding: 0;
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-            overscroll-behavior: none;
-        }
-        /* 头部固定 */
-        header {
-            background: #fff;
-            padding: 15px;
-            text-align: center;
-            font-weight: bold;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }
-        /* 账本列表区 */
-        main {
-            flex: 1;
-            overflow-y: auto;
-            padding: 15px;
-        }
-        .card {
-            background: #fff;
-            border-radius: 12px;
-            padding: 15px;
-            margin-bottom: 12px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        }
-        .card-header { display: flex; justify-content: space-between; border-bottom: 1px solid #eee; padding-bottom: 8px; }
-        .profit { color: var(--success); font-weight: bold; }
-        .loss { color: var(--danger); font-weight: bold; }
+        :root { --p: #2563eb; --s: #16a34a; --d: #dc2626; --bg: #f1f5f9; }
+        body { font-family: system-ui; background: var(--bg); margin: 0; padding-bottom: 80px; }
+        header { background: #fff; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
+        .summary { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
+        .stat-card { background: white; padding: 15px; border-radius: 12px; text-align: center; }
+        .stat-val { font-size: 1.2rem; font-weight: bold; display: block; }
+        
+        main { padding: 15px; }
+        .trade-item { background: white; padding: 15px; border-radius: 12px; margin-bottom: 10px; border-left: 5px solid #ccc; }
+        .item-buy { border-left-color: var(--s); }
+        .item-sell { border-left-color: var(--p); }
+        
+        /* 底部操作栏 */
+        .bottom-bar { position: fixed; bottom: 0; width: 100%; background: #fff; display: flex; padding: 10px 0; border-top: 1px solid #ddd; }
+        .btn-main { flex: 1; margin: 0 10px; padding: 12px; border-radius: 8px; border: none; font-weight: bold; font-size: 16px; }
+        .btn-add { background: var(--p); color: white; }
+        .btn-ocr { background: #64748b; color: white; }
 
-        /* 大按钮与表单 */
-        .fab {
-            position: fixed;
-            bottom: 30px;
-            right: 30px;
-            width: 60px;
-            height: 60px;
-            background: var(--primary);
-            color: white;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 30px;
-            box-shadow: 0 4px 12px rgba(37,99,235,0.4);
-        }
-        .form-overlay {
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.5);
-            display: none;
-            justify-content: center;
-            align-items: flex-end;
-        }
-        .form-container {
-            background: #fff;
-            width: 100%;
-            border-radius: 20px 20px 0 0;
-            padding: 20px;
-            box-sizing: border-box;
-        }
-        .input-group { margin-bottom: 15px; }
-        label { display: block; font-size: 14px; margin-bottom: 5px; color: #64748b; }
-        input, select {
-            width: 100%;
-            padding: 12px;
-            border: 1px solid #e2e8f0;
-            border-radius: 8px;
-            font-size: 16px; /* 防止 iOS 缩放 */
-            box-sizing: border-box;
-        }
-        .btn-submit {
-            background: var(--primary);
-            color: white;
-            border: none;
-            width: 100%;
-            padding: 15px;
-            border-radius: 12px;
-            font-size: 18px;
-            font-weight: bold;
-            margin-top: 10px;
-        }
+        /* 弹窗样式 */
+        .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; align-items: flex-end; z-index: 100; }
+        .modal-content { background: white; width: 100%; border-radius: 20px 20px 0 0; padding: 20px; box-sizing: border-box; }
+        input, select { width: 100%; padding: 12px; margin: 8px 0; border: 1px solid #ddd; border-radius: 8px; font-size: 16px; box-sizing: border-box; }
+        .ocr-loading { display: none; text-align: center; padding: 20px; }
     </style>
 </head>
 <body>
 
-<header>我的美股账本</header>
+<header>
+    <div class="summary">
+        <div class="stat-card">
+            <span style="color: #64748b; font-size: 12px;">总实现盈亏</span>
+            <span class="stat-val" id="total-pnl">$0.00</span>
+        </div>
+        <div class="stat-card">
+            <span style="color: #64748b; font-size: 12px;">当前持仓数</span>
+            <span class="stat-val" id="pos-count">0</span>
+        </div>
+    </div>
+</header>
 
-<main id="list"></main>
+<main id="list-container"></main>
 
-<div class="fab" onclick="toggleForm()">+</div>
+<div class="bottom-bar">
+    <button class="btn-main btn-ocr" onclick="document.getElementById('file-input').click()">📷 截图识别</button>
+    <button class="btn-main btn-add" onclick="openModal()">+ 手动记账</button>
+</div>
 
-<div class="form-overlay" id="overlay" onclick="if(event.target==this)toggleForm()">
-    <div class="form-container">
-        <h3 style="margin-top:0">记一笔交易</h3>
-        <div class="input-group">
-            <label>股票代码</label>
-            <input type="text" id="symbol" placeholder="如: NVDA" required>
-        </div>
-        <div class="input-group">
-            <label>动作</label>
-            <select id="action">
-                <option value="buy">买入 (Buy)</option>
-                <option value="sell">卖出 (Sell)</option>
-            </select>
-        </div>
-        <div class="input-group" style="display:flex; gap:10px;">
-            <div style="flex:1">
-                <label>数量</label>
-                <input type="number" id="qty" inputmode="decimal" placeholder="0.00">
-            </div>
-            <div style="flex:1">
-                <label>成交价</label>
-                <input type="number" id="price" inputmode="decimal" placeholder="0.00">
-            </div>
-        </div>
-        <div class="input-group">
-            <label>手续费 (USD)</label>
-            <input type="number" id="fee" inputmode="decimal" value="0">
-        </div>
-        <button class="btn-submit" onclick="saveTrade()">保存记录</button>
+<input type="file" id="file-input" hidden accept="image/*" onchange="handleOCR(this)">
+
+<div class="modal" id="modal">
+    <div class="modal-content">
+        <h3 id="modal-title">记一笔交易</h3>
+        <div id="ocr-status" class="ocr-loading">正在识别图片，请稍后...</div>
+        <input type="text" id="symbol" placeholder="股票代码 (如 AAPL)" required>
+        <select id="action">
+            <option value="buy">买入 / 加仓</option>
+            <option value="sell">卖出 / 减仓</option>
+        </select>
+        <input type="number" id="qty" inputmode="decimal" placeholder="成交数量">
+        <input type="number" id="price" inputmode="decimal" placeholder="成交单价">
+        <input type="number" id="fee" inputmode="decimal" placeholder="手续费 (默认0)" value="0">
+        <button class="btn-main btn-add" style="width:100%; margin: 10px 0;" onclick="saveData()">保存</button>
+        <button class="btn-main" style="background:#eee;" onclick="closeModal()">取消</button>
     </div>
 </div>
 
-<script type="module">
-    import Dexie from 'https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.mjs';
+<script>
+    const db = new Dexie("StockDB");
+    db.version(1).stores({ trades: '++id, symbol, action, timestamp' });
 
-    // 1. 初始化数据库 (本地 IndexedDB)
-    const db = new Dexie('StockLedger');
-    db.version(1).stores({
-        trades: '++id, symbol, date, action'
-    });
+    // --- 核心逻辑：计算均价与盈亏 ---
+    async function calculateMetrics() {
+        const allTrades = await db.trades.orderBy('timestamp').toArray();
+        let inventory = {}; // { AAPL: { qty: 0, totalCost: 0 } }
+        let totalRealizedPnL = 0;
 
-    window.toggleForm = () => {
-        const el = document.getElementById('overlay');
-        el.style.display = el.style.display === 'flex' ? 'none' : 'flex';
-    };
+        const processedTrades = allTrades.map(t => {
+            if (!inventory[t.symbol]) inventory[t.symbol] = { qty: 0, totalCost: 0 };
+            
+            let itemPnL = null;
+            let itemPnLRate = null;
 
-    // 2. 保存交易
-    window.saveTrade = async () => {
-        const trade = {
+            if (t.action === 'buy') {
+                inventory[t.symbol].qty += t.qty;
+                inventory[t.symbol].totalCost += (t.qty * t.price + t.fee);
+            } else {
+                // 卖出逻辑
+                const avgPrice = inventory[t.symbol].totalCost / inventory[t.symbol].qty;
+                itemPnL = (t.price - avgPrice) * t.qty - t.fee;
+                itemPnLRate = ((itemPnL / (avgPrice * t.qty)) * 100).toFixed(2);
+                
+                totalRealizedPnL += itemPnL;
+                
+                // 更新库存
+                inventory[t.symbol].qty -= t.qty;
+                inventory[t.symbol].totalCost -= (avgPrice * t.qty);
+            }
+
+            return { ...t, realizedPnL: itemPnL, pnlRate: itemPnLRate, currentAvg: (inventory[t.symbol].totalCost / inventory[t.symbol].qty).toFixed(2) };
+        });
+
+        return { processedTrades, totalRealizedPnL, activePositions: Object.keys(inventory).filter(s => inventory[s].qty > 0).length };
+    }
+
+    // --- OCR 识别逻辑 ---
+    async function handleOCR(input) {
+        if (!input.files[0]) return;
+        openModal();
+        document.getElementById('ocr-status').style.display = 'block';
+        
+        try {
+            const worker = await Tesseract.createWorker('eng');
+            const { data: { text } } = await worker.recognize(input.files[0]);
+            console.log("识别结果:", text);
+            
+            // 简单的正则匹配示例：寻找连续大写字母作为代码，寻找数字作为价格
+            const symbolMatch = text.match(/[A-Z]{3,5}/);
+            const priceMatch = text.match(/\d+\.\d{2}/);
+
+            if (symbolMatch) document.getElementById('symbol').value = symbolMatch[0];
+            if (priceMatch) document.getElementById('price').value = priceMatch[0];
+            
+            await worker.terminate();
+        } catch (e) {
+            alert("识别失败，请手动输入");
+        } finally {
+            document.getElementById('ocr-status').style.display = 'none';
+        }
+    }
+
+    // --- UI 操作 ---
+    function openModal() { document.getElementById('modal').style.display = 'flex'; }
+    function closeModal() { document.getElementById('modal').style.display = 'none'; }
+
+    async function saveData() {
+        const data = {
             symbol: document.getElementById('symbol').value.toUpperCase(),
             action: document.getElementById('action').value,
             qty: parseFloat(document.getElementById('qty').value),
             price: parseFloat(document.getElementById('price').value),
             fee: parseFloat(document.getElementById('fee').value || 0),
-            date: new Date().toLocaleString(),
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            date: new Date().toLocaleString()
         };
+        await db.trades.add(data);
+        closeModal();
+        refresh();
+    }
 
-        if(!trade.symbol || !trade.qty || !trade.price) return alert('请填写完整信息');
+    async function refresh() {
+        const { processedTrades, totalRealizedPnL, activePositions } = await calculateMetrics();
+        
+        document.getElementById('total-pnl').innerText = `$${totalRealizedPnL.toFixed(2)}`;
+        document.getElementById('total-pnl').className = 'stat-val ' + (totalRealizedPnL >= 0 ? 'profit' : 'loss');
+        document.getElementById('pos-count').innerText = activePositions;
 
-        // 如果是卖出，计算盈亏（简单逻辑：此处演示单笔对应，复杂逻辑可根据持仓均价）
-        if(trade.action === 'sell') {
-            // 这里可以添加逻辑去匹配买入成本，为了演示简单，我们先记录基础数据
-            trade.result = "待结算"; 
-        }
-
-        await db.trades.add(trade);
-        toggleForm();
-        renderList();
-    };
-
-    // 3. 渲染列表
-    async function renderList() {
-        const trades = await db.trades.orderBy('timestamp').reverse().toArray();
-        const listEl = document.getElementById('list');
-        listEl.innerHTML = trades.map(t => `
-            <div class="card">
-                <div class="card-header">
-                    <span><strong>${t.symbol}</strong> (${t.action === 'buy' ? '买入' : '卖出'})</span>
-                    <small>${t.date}</small>
+        const container = document.getElementById('list-container');
+        container.innerHTML = processedTrades.reverse().map(t => `
+            <div class="trade-item ${t.action === 'buy' ? 'item-buy' : 'item-sell'}">
+                <div style="display:flex; justify-content:space-between">
+                    <strong>${t.symbol}</strong>
+                    <span>${t.action === 'buy' ? '加仓' : '减仓'}</span>
                 </div>
-                <div style="margin-top:10px; display:flex; justify-content:space-between;">
-                    <span>数量: ${t.qty}</span>
-                    <span>价格: $${t.price}</span>
-                    <span>费用: $${t.fee}</span>
+                <div style="font-size:14px; color:#666; margin: 5px 0;">
+                    ${t.qty}股 @ $${t.price} (费: $${t.fee})
                 </div>
-                ${t.action === 'sell' ? `<div style="margin-top:8px; text-align:right;">成本: $${(t.qty * t.price).toFixed(2)}</div>` : ''}
+                ${t.realizedPnL !== null ? `
+                    <div style="text-align:right; font-weight:bold; color: ${t.realizedPnL >= 0 ? 'var(--s)' : 'var(--d)'}">
+                        盈亏: $${t.realizedPnL.toFixed(2)} (${t.pnlRate}%)
+                    </div>
+                ` : `<div style="text-align:right; font-size:12px; color:#999">当前均价: $${t.currentAvg}</div>`}
+                <div style="font-size:10px; color:#999; margin-top:5px;">${t.date}</div>
             </div>
         `).join('');
     }
 
-    renderList();
+    refresh();
 </script>
 </body>
 </html>
