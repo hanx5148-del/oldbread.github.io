@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>美股交易账本</title>
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <script src="https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.mjs" type="module"></script>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --success: #16a34a;
+            --danger: #dc2626;
+            --bg: #f8fafc;
+        }
+        body {
+            font-family: -apple-system, system-ui, sans-serif;
+            background: var(--bg);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overscroll-behavior: none;
+        }
+        /* 头部固定 */
+        header {
+            background: #fff;
+            padding: 15px;
+            text-align: center;
+            font-weight: bold;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        /* 账本列表区 */
+        main {
+            flex: 1;
+            overflow-y: auto;
+            padding: 15px;
+        }
+        .card {
+            background: #fff;
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .card-header { display: flex; justify-content: space-between; border-bottom: 1px solid #eee; padding-bottom: 8px; }
+        .profit { color: var(--success); font-weight: bold; }
+        .loss { color: var(--danger); font-weight: bold; }
+
+        /* 大按钮与表单 */
+        .fab {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            width: 60px;
+            height: 60px;
+            background: var(--primary);
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 30px;
+            box-shadow: 0 4px 12px rgba(37,99,235,0.4);
+        }
+        .form-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5);
+            display: none;
+            justify-content: center;
+            align-items: flex-end;
+        }
+        .form-container {
+            background: #fff;
+            width: 100%;
+            border-radius: 20px 20px 0 0;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .input-group { margin-bottom: 15px; }
+        label { display: block; font-size: 14px; margin-bottom: 5px; color: #64748b; }
+        input, select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 16px; /* 防止 iOS 缩放 */
+            box-sizing: border-box;
+        }
+        .btn-submit {
+            background: var(--primary);
+            color: white;
+            border: none;
+            width: 100%;
+            padding: 15px;
+            border-radius: 12px;
+            font-size: 18px;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<header>我的美股账本</header>
+
+<main id="list"></main>
+
+<div class="fab" onclick="toggleForm()">+</div>
+
+<div class="form-overlay" id="overlay" onclick="if(event.target==this)toggleForm()">
+    <div class="form-container">
+        <h3 style="margin-top:0">记一笔交易</h3>
+        <div class="input-group">
+            <label>股票代码</label>
+            <input type="text" id="symbol" placeholder="如: NVDA" required>
+        </div>
+        <div class="input-group">
+            <label>动作</label>
+            <select id="action">
+                <option value="buy">买入 (Buy)</option>
+                <option value="sell">卖出 (Sell)</option>
+            </select>
+        </div>
+        <div class="input-group" style="display:flex; gap:10px;">
+            <div style="flex:1">
+                <label>数量</label>
+                <input type="number" id="qty" inputmode="decimal" placeholder="0.00">
+            </div>
+            <div style="flex:1">
+                <label>成交价</label>
+                <input type="number" id="price" inputmode="decimal" placeholder="0.00">
+            </div>
+        </div>
+        <div class="input-group">
+            <label>手续费 (USD)</label>
+            <input type="number" id="fee" inputmode="decimal" value="0">
+        </div>
+        <button class="btn-submit" onclick="saveTrade()">保存记录</button>
+    </div>
+</div>
+
+<script type="module">
+    import Dexie from 'https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.mjs';
+
+    // 1. 初始化数据库 (本地 IndexedDB)
+    const db = new Dexie('StockLedger');
+    db.version(1).stores({
+        trades: '++id, symbol, date, action'
+    });
+
+    window.toggleForm = () => {
+        const el = document.getElementById('overlay');
+        el.style.display = el.style.display === 'flex' ? 'none' : 'flex';
+    };
+
+    // 2. 保存交易
+    window.saveTrade = async () => {
+        const trade = {
+            symbol: document.getElementById('symbol').value.toUpperCase(),
+            action: document.getElementById('action').value,
+            qty: parseFloat(document.getElementById('qty').value),
+            price: parseFloat(document.getElementById('price').value),
+            fee: parseFloat(document.getElementById('fee').value || 0),
+            date: new Date().toLocaleString(),
+            timestamp: Date.now()
+        };
+
+        if(!trade.symbol || !trade.qty || !trade.price) return alert('请填写完整信息');
+
+        // 如果是卖出，计算盈亏（简单逻辑：此处演示单笔对应，复杂逻辑可根据持仓均价）
+        if(trade.action === 'sell') {
+            // 这里可以添加逻辑去匹配买入成本，为了演示简单，我们先记录基础数据
+            trade.result = "待结算"; 
+        }
+
+        await db.trades.add(trade);
+        toggleForm();
+        renderList();
+    };
+
+    // 3. 渲染列表
+    async function renderList() {
+        const trades = await db.trades.orderBy('timestamp').reverse().toArray();
+        const listEl = document.getElementById('list');
+        listEl.innerHTML = trades.map(t => `
+            <div class="card">
+                <div class="card-header">
+                    <span><strong>${t.symbol}</strong> (${t.action === 'buy' ? '买入' : '卖出'})</span>
+                    <small>${t.date}</small>
+                </div>
+                <div style="margin-top:10px; display:flex; justify-content:space-between;">
+                    <span>数量: ${t.qty}</span>
+                    <span>价格: $${t.price}</span>
+                    <span>费用: $${t.fee}</span>
+                </div>
+                ${t.action === 'sell' ? `<div style="margin-top:8px; text-align:right;">成本: $${(t.qty * t.price).toFixed(2)}</div>` : ''}
+            </div>
+        `).join('');
+    }
+
+    renderList();
+</script>
+</body>
+</html>
